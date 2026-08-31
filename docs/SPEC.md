@@ -11,8 +11,8 @@
 1. Input Specification (graph.json)
   The CLI will ingest a Graphify JSON graph. The agent must define Go structs to unmarshal this schema:
 
-  - Nodes: Contain *id*, *label*, *source_file*, *community*, *type* (e.g., function, class).
-  - Edges: Contain *source_id*, *target_id*, *relationship* (e.g., uses, imports), *confidence* (EXTRACTED, INFERRED).
+  - Nodes: Contain *id*, *label*, *source_file*, *community*, *file_type* (e.g., function, class).
+  - Links: Contain *source*, *target*, *relation* (e.g., uses, imports), and *confidence* (`EXTRACTED`, `INFERRED`, or `AMBIGUOUS`). Links normally appear under `links`; `edges` is accepted as a compatibility alias.
 
 2. Output Specification (OKF Bundle)
 

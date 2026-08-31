@@ -51,10 +51,14 @@ func newGenerateCommand() *cobra.Command {
 			}
 			defer file.Close()
 
-			if _, err := parseGraph(file); err != nil {
+			graph, err := parseGraph(file)
+			if err != nil {
 				return fmt.Errorf("parse input %q: %w", options.input, err)
 			}
-			// Bundle planning and writing are implemented in subsequent stages.
+			if _, err := planBundle(graph, options.input, options.output, options.groupBy, command.ErrOrStderr()); err != nil {
+				return fmt.Errorf("plan bundle: %w", err)
+			}
+			// Rendering and writing are implemented in subsequent stages.
 			return nil
 		},
 	}

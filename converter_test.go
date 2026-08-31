@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -21,6 +23,89 @@ func TestParseGraphLinksAndFallbacks(t *testing.T) {
 	}
 	if len(graph.Links) != 1 || graph.Links[0].Relation != "calls" {
 		t.Fatalf("links = %#v", graph.Links)
+	}
+}
+
+func intPointer(value int) *int { return &value }
+
+func TestPlanBundleGroupingPaths(t *testing.T) {
+	graph := Graph{Nodes: []Node{
+		{ID: "api/user", SourceFile: `src\api\user.go`},
+		{ID: "root", SourceFile: "main.go"},
+		{ID: "missing"},
+		{ID: "absolute", SourceFile: "/tmp/file.go"},
+		{ID: "traversal", SourceFile: "src/../secret.go"},
+	}}
+	var warnings bytes.Buffer
+	plan, err := planBundle(graph, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "directory", &warnings)
+	if err != nil {
+		t.Fatalf("planBundle() error = %v", err)
+	}
+	want := []string{"_ungrouped/absolute.md", "_ungrouped/missing.md", "_ungrouped/traversal.md", "root.md", "src/api/api_user.md"}
+	for index, destination := range want {
+		if plan.Nodes[index].Destination != destination {
+			t.Errorf("destination[%d] = %q, want %q", index, plan.Nodes[index].Destination, destination)
+		}
+	}
+	if got := strings.Count(warnings.String(), "warning:"); got != 3 {
+		t.Errorf("warnings = %q, want 3 warnings", warnings.String())
+	}
+}
+
+func TestPlanBundleCommunityPaths(t *testing.T) {
+	graph := Graph{Nodes: []Node{{ID: "zero", Community: intPointer(0)}, {ID: "none"}, {ID: "negative", Community: intPointer(-2)}}}
+	plan, err := planBundle(graph, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "community", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"zero": "community-0/zero.md", "none": "_ungrouped/none.md", "negative": "community--2/negative.md"}
+	for _, node := range plan.Nodes {
+		if node.Destination != want[node.Node.ID] {
+			t.Errorf("destination for %q = %q, want %q", node.Node.ID, node.Destination, want[node.Node.ID])
+		}
+	}
+}
+
+func TestPlanBundleRejectsDestinationConflicts(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []Node
+		want  string
+	}{
+		{"sanitized", []Node{{ID: "a/b", SourceFile: "x.go"}, {ID: "a?b", SourceFile: "y.go"}}, "collision"},
+		{"case folded", []Node{{ID: "Name", SourceFile: "x.go"}, {ID: "name", SourceFile: "y.go"}}, "collision"},
+		{"index reserved", []Node{{ID: "INDEX", SourceFile: "x.go"}}, "reserved"},
+		{"log reserved", []Node{{ID: "log", SourceFile: "x.go"}}, "reserved"},
+		{"empty filename", []Node{{ID: "...", SourceFile: "x.go"}}, "empty name"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := planBundle(Graph{Nodes: test.nodes}, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "directory", nil)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("planBundle() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestPlanBundleRejectsUnsafeOutputs(t *testing.T) {
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := t.TempDir()
+	tests := []struct{ name, input, output, want string }{
+		{"root", filepath.Join(temp, "graph.json"), string(filepath.Separator), "filesystem root"},
+		{"current", filepath.Join(temp, "graph.json"), cwd, "current directory"},
+		{"contains input", filepath.Join(temp, "bundle", "graph.json"), filepath.Join(temp, "bundle"), "contains input"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := planBundle(Graph{}, test.input, test.output, "directory", nil)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("planBundle() error = %v, want containing %q", err, test.want)
+			}
+		})
 	}
 }
 

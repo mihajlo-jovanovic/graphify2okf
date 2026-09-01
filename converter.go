@@ -33,6 +33,12 @@ type BundlePlan struct {
 	Nodes      []PlannedNode
 }
 
+// RenderedFile is a bundle-relative concept file rendered entirely in memory.
+type RenderedFile struct {
+	Destination string
+	Content     []byte
+}
+
 // planBundle validates the output configuration and computes all node paths.
 func planBundle(graph Graph, input, output, groupBy string, warnings io.Writer) (BundlePlan, error) {
 	inputPath, err := filepath.Abs(input)

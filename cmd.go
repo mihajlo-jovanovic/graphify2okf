@@ -55,10 +55,14 @@ func newGenerateCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("parse input %q: %w", options.input, err)
 			}
-			if _, err := planBundle(graph, options.input, options.output, options.groupBy, command.ErrOrStderr()); err != nil {
+			plan, err := planBundle(graph, options.input, options.output, options.groupBy, command.ErrOrStderr())
+			if err != nil {
 				return fmt.Errorf("plan bundle: %w", err)
 			}
-			// Rendering and writing are implemented in subsequent stages.
+			if _, err := renderConcepts(plan, graph.Links, command.ErrOrStderr()); err != nil {
+				return fmt.Errorf("render bundle: %w", err)
+			}
+			// Filesystem writing is implemented in the next stage.
 			return nil
 		},
 	}

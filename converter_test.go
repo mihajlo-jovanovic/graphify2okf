@@ -144,3 +144,98 @@ func TestParseGraphValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderConceptsRelationshipsAndWarnings(t *testing.T) {
+	graph := Graph{Nodes: []Node{
+		{ID: "caller", Label: "Caller", FileType: "function", SourceFile: "src/api/caller.go", Community: intPointer(2)},
+		{ID: "target", Label: "Target [value]", FileType: "class", SourceFile: "lib/target.go"},
+	}, Links: []Edge{
+		{Source: "caller", Target: "target", Relation: "uses", Confidence: "EXTRACTED"},
+		{Source: "missing", Target: "target", Relation: "bad"},
+		{Source: "caller", Target: "absent", Relation: "bad"},
+	}}
+	plan, err := planBundle(graph, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "directory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warnings bytes.Buffer
+	files, err := renderConcepts(plan, graph.Links, &warnings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Destination != "lib/target.md" || files[1].Destination != "src/api/caller.md" {
+		t.Fatalf("files = %#v", files)
+	}
+	target := string(files[0].Content)
+	caller := string(files[1].Content)
+	if !strings.Contains(caller, `[Target \[value\]](../../lib/target.md)`) {
+		t.Errorf("caller relationship missing:\n%s", caller)
+	}
+	if !strings.Contains(target, `[Caller](../src/api/caller.md)`) {
+		t.Errorf("target relationship missing:\n%s", target)
+	}
+	if got := strings.Count(warnings.String(), "warning:"); got != 2 {
+		t.Errorf("warnings = %q, want 2", warnings.String())
+	}
+}
+
+func TestRenderConceptFrontmatterAndEmptyRelationships(t *testing.T) {
+	graph := Graph{Nodes: []Node{{
+		ID: "quoted", Label: `A: "quoted" value`, FileType: "concept",
+	}}}
+	plan, err := planBundle(graph, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "directory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := renderConcepts(plan, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(files[0].Content)
+	checks := []string{
+		`type: "concept"`, `title: "A: \"quoted\" value"`,
+		`description: "Graphify extracted node for A: \"quoted\" value"`,
+		`tags: ["graphify_extracted"]`, "- **Source:** None.", "- **Community:** None.",
+	}
+	for _, want := range checks {
+		if !strings.Contains(content, want) {
+			t.Errorf("content missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "resource:") {
+		t.Errorf("missing resource should be omitted:\n%s", content)
+	}
+	if got := strings.Count(content, "- None."); got != 2 {
+		t.Errorf("empty relationship markers = %d, want 2:\n%s", got, content)
+	}
+}
+
+func TestRenderConceptsSortsRelationships(t *testing.T) {
+	graph := Graph{Nodes: []Node{
+		{ID: "root", Label: "Root", FileType: "function", SourceFile: "root.go"},
+		{ID: "z", Label: "Zulu", FileType: "function", SourceFile: "z.go"},
+		{ID: "a", Label: "Alpha", FileType: "function", SourceFile: "a.go"},
+	}, Links: []Edge{
+		{Source: "root", Target: "z", Relation: "calls"},
+		{Source: "root", Target: "a", Relation: "uses"},
+		{Source: "root", Target: "a", Relation: "calls"},
+	}}
+	plan, err := planBundle(graph, filepath.Join(t.TempDir(), "graph.json"), filepath.Join(t.TempDir(), "bundle"), "directory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := renderConcepts(plan, graph.Links, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content string
+	for _, file := range files {
+		if file.Destination == "root.md" {
+			content = string(file.Content)
+		}
+	}
+	positions := []int{strings.Index(content, "**calls**: [Alpha]"), strings.Index(content, "**uses**: [Alpha]"), strings.Index(content, "**calls**: [Zulu]")}
+	if positions[0] < 0 || positions[0] >= positions[1] || positions[1] >= positions[2] {
+		t.Errorf("relationships not sorted by label then relation:\n%s", content)
+	}
+}

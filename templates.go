@@ -25,6 +25,15 @@ type conceptView struct {
 	Outbound, Inbound                  []relationshipView
 }
 
+type indexEntry struct {
+	Label, Description, Link string
+}
+
+type indexView struct {
+	Root                  bool
+	Concepts, Directories []indexEntry
+}
+
 var conceptTemplate = template.Must(template.New("concept").Funcs(template.FuncMap{
 	"yaml": yamlValue,
 	"md":   markdownText,
@@ -59,6 +68,36 @@ tags: {{ yaml .Tags }}
 {{- if .Inbound }}
 {{ range .Inbound -}}
 - **{{ md .Relation }}**{{ if .Confidence }} ({{ md .Confidence }}){{ end }}: [{{ md .Label }}]({{ .Link }})
+{{ end -}}
+{{ else }}
+- None.
+{{ end }}`))
+
+var indexTemplate = template.Must(template.New("index").Funcs(template.FuncMap{
+	"yaml": yamlValue,
+	"md":   markdownText,
+}).Parse(`{{ if .Root -}}
+---
+okf_version: {{ yaml "0.2" }}
+---
+
+{{ end -}}
+# Knowledge Index
+
+## Concepts
+
+{{- if .Concepts }}
+{{ range .Concepts -}}
+- [{{ md .Label }}]({{ .Link }}) — {{ md .Description }}
+{{ end -}}
+{{ else }}
+- None.
+{{ end }}
+## Directories
+
+{{- if .Directories }}
+{{ range .Directories -}}
+- [{{ md .Label }}]({{ .Link }})
 {{ end -}}
 {{ else }}
 - None.
@@ -109,6 +148,68 @@ func renderConcepts(plan BundlePlan, edges []Edge, warnings io.Writer) ([]Render
 		files = append(files, RenderedFile{Destination: planned.Destination, Content: content.Bytes()})
 	}
 	return files, nil
+}
+
+// renderIndexes builds a progressive index for the root and each directory
+// containing concepts or other generated directories.
+func renderIndexes(plan BundlePlan) ([]RenderedFile, error) {
+	directories := map[string]struct{}{"": {}}
+	concepts := make(map[string][]indexEntry)
+	children := make(map[string]map[string]struct{})
+	for _, planned := range plan.Nodes {
+		directory := filepath.ToSlash(filepath.Dir(planned.Destination))
+		if directory == "." {
+			directory = ""
+		}
+		concepts[directory] = append(concepts[directory], indexEntry{
+			Label: planned.Node.Label, Description: "Graphify extracted node for " + planned.Node.Label,
+			Link: filepath.Base(planned.Destination),
+		})
+		registerDirectory(directory, directories, children)
+	}
+	paths := make([]string, 0, len(directories))
+	for directory := range directories {
+		paths = append(paths, directory)
+	}
+	sort.Strings(paths)
+	files := make([]RenderedFile, 0, len(paths))
+	for _, directory := range paths {
+		sort.Slice(concepts[directory], func(i, j int) bool {
+			left, right := concepts[directory][i], concepts[directory][j]
+			if left.Label != right.Label {
+				return left.Label < right.Label
+			}
+			return left.Link < right.Link
+		})
+		var childEntries []indexEntry
+		for child := range children[directory] {
+			childEntries = append(childEntries, indexEntry{Label: child, Link: child + "/index.md"})
+		}
+		sort.Slice(childEntries, func(i, j int) bool { return childEntries[i].Label < childEntries[j].Label })
+		var content bytes.Buffer
+		view := indexView{Root: directory == "", Concepts: concepts[directory], Directories: childEntries}
+		if err := indexTemplate.Execute(&content, view); err != nil {
+			return nil, fmt.Errorf("render index %q: %w", directory, err)
+		}
+		files = append(files, RenderedFile{Destination: filepath.ToSlash(filepath.Join(directory, "index.md")), Content: content.Bytes()})
+	}
+	return files, nil
+}
+
+func registerDirectory(directory string, directories map[string]struct{}, children map[string]map[string]struct{}) {
+	if directory == "" {
+		return
+	}
+	parts := strings.Split(directory, "/")
+	parent := ""
+	for _, part := range parts {
+		if children[parent] == nil {
+			children[parent] = make(map[string]struct{})
+		}
+		children[parent][part] = struct{}{}
+		parent = filepath.ToSlash(filepath.Join(parent, part))
+		directories[parent] = struct{}{}
+	}
 }
 
 func relationship(from, other PlannedNode, edge Edge) relationshipView {

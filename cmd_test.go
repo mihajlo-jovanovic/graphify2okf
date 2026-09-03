@@ -30,7 +30,7 @@ func TestGenerateRejectsInvalidGroupBy(t *testing.T) {
 	}
 }
 
-func TestGenerateParsesInputWithoutWritingOutput(t *testing.T) {
+func TestGenerateWritesBundle(t *testing.T) {
 	tempDir := t.TempDir()
 	input := filepath.Join(tempDir, "graph.json")
 	if err := os.WriteFile(input, []byte(`{"nodes":[{"id":"one"}]}`), 0o600); err != nil {
@@ -42,7 +42,11 @@ func TestGenerateParsesInputWithoutWritingOutput(t *testing.T) {
 	if err := command.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if _, err := os.Stat(output); !os.IsNotExist(err) {
-		t.Fatalf("output was unexpectedly created: %v", err)
+	if _, err := os.Stat(filepath.Join(output, "_ungrouped", "one.md")); err != nil {
+		t.Fatalf("generated concept: %v", err)
+	}
+	rootIndex, err := os.ReadFile(filepath.Join(output, "index.md"))
+	if err != nil || !strings.Contains(string(rootIndex), `okf_version: "0.2"`) {
+		t.Fatalf("root index = %q, error = %v", rootIndex, err)
 	}
 }

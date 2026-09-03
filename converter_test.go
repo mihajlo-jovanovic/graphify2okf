@@ -2,10 +2,115 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRenderIndexesProgressively(t *testing.T) {
+	plan := BundlePlan{Nodes: []PlannedNode{
+		{Node: Node{ID: "z", Label: "Zulu"}, Destination: "src/z.md"},
+		{Node: Node{ID: "a", Label: "Alpha"}, Destination: "src/api/a.md"},
+		{Node: Node{ID: "root", Label: "Root"}, Destination: "root.md"},
+	}}
+	files, err := renderIndexes(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := make(map[string]string)
+	for _, file := range files {
+		contents[file.Destination] = string(file.Content)
+	}
+	if len(contents) != 3 {
+		t.Fatalf("indexes = %v", contents)
+	}
+	if !strings.Contains(contents["index.md"], `okf_version: "0.2"`) ||
+		!strings.Contains(contents["index.md"], `[Root](root.md)`) ||
+		!strings.Contains(contents["index.md"], `[src](src/index.md)`) {
+		t.Errorf("root index:\n%s", contents["index.md"])
+	}
+	if strings.Contains(contents["src/index.md"], "okf_version") ||
+		!strings.Contains(contents["src/index.md"], `[Zulu](z.md) — Graphify extracted node for Zulu`) ||
+		!strings.Contains(contents["src/index.md"], `[api](api/index.md)`) {
+		t.Errorf("src index:\n%s", contents["src/index.md"])
+	}
+	if strings.Contains(contents["src/api/index.md"], "Zulu") {
+		t.Errorf("nested index exposes non-immediate concept:\n%s", contents["src/api/index.md"])
+	}
+}
+
+func TestWriteBundleRegenerationAndPreflightPreservation(t *testing.T) {
+	temp := t.TempDir()
+	output := filepath.Join(temp, "bundle")
+	input := filepath.Join(temp, "graph.json")
+	graph := Graph{Nodes: []Node{{ID: "one", Label: "One", FileType: "function", SourceFile: "src/one.go"}}}
+	plan, err := planBundle(graph, input, output, "directory", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := renderBundle(plan, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeBundle(plan, files); err != nil {
+		t.Fatal(err)
+	}
+	first := snapshotFiles(t, output)
+	if err := os.WriteFile(filepath.Join(output, "orphan.md"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeBundle(plan, files); err != nil {
+		t.Fatal(err)
+	}
+	second := snapshotFiles(t, output)
+	if !bytes.Equal(first, second) {
+		t.Errorf("repeated output differs\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	if _, err := os.Stat(filepath.Join(output, "orphan.md")); !os.IsNotExist(err) {
+		t.Errorf("orphan was not removed: %v", err)
+	}
+
+	sentinel := filepath.Join(output, "keep.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = planBundle(Graph{Nodes: []Node{{ID: "index", SourceFile: "x.go"}}}, input, output, "directory", nil)
+	if err == nil {
+		t.Fatal("invalid preflight unexpectedly succeeded")
+	}
+	if content, readErr := os.ReadFile(sentinel); readErr != nil || string(content) != "keep" {
+		t.Fatalf("preflight changed existing output: content=%q error=%v", content, readErr)
+	}
+}
+
+func snapshotFiles(t *testing.T, root string) []byte {
+	t.Helper()
+	var snapshot bytes.Buffer
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&snapshot, "%s\n%s\n", filepath.ToSlash(relative), content)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot.Bytes()
+}
 
 func TestParseGraphLinksAndFallbacks(t *testing.T) {
 	graph, err := parseGraph(strings.NewReader(`{

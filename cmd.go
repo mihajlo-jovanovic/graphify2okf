@@ -59,10 +59,14 @@ func newGenerateCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("plan bundle: %w", err)
 			}
-			if _, err := renderConcepts(plan, graph.Links, command.ErrOrStderr()); err != nil {
+			files, err := renderBundle(plan, graph.Links, command.ErrOrStderr())
+			if err != nil {
 				return fmt.Errorf("render bundle: %w", err)
 			}
-			// Filesystem writing is implemented in the next stage.
+			if err := writeBundle(plan, files); err != nil {
+				return fmt.Errorf("write bundle: %w", err)
+			}
+			fmt.Fprintf(command.OutOrStdout(), "generated %d concepts in %s\n", len(plan.Nodes), plan.OutputPath)
 			return nil
 		},
 	}

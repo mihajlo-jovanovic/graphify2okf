@@ -39,6 +39,45 @@ type RenderedFile struct {
 	Content     []byte
 }
 
+// renderBundle completes all rendering before any filesystem changes occur.
+func renderBundle(plan BundlePlan, edges []Edge, warnings io.Writer) ([]RenderedFile, error) {
+	concepts, err := renderConcepts(plan, edges, warnings)
+	if err != nil {
+		return nil, err
+	}
+	indexes, err := renderIndexes(plan)
+	if err != nil {
+		return nil, err
+	}
+	files := append(concepts, indexes...)
+	sort.Slice(files, func(i, j int) bool { return files[i].Destination < files[j].Destination })
+	return files, nil
+}
+
+// writeBundle replaces the output only after the complete bundle has passed
+// parsing, path planning, relationship resolution, and rendering.
+func writeBundle(plan BundlePlan, files []RenderedFile) error {
+	if err := os.RemoveAll(plan.OutputPath); err != nil {
+		return fmt.Errorf("clear output directory: %w", err)
+	}
+	if err := os.MkdirAll(plan.OutputPath, 0o755); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	for _, file := range files {
+		destination := filepath.Join(plan.OutputPath, filepath.FromSlash(file.Destination))
+		if !pathContains(plan.OutputPath, destination) {
+			return fmt.Errorf("unsafe rendered destination %q", file.Destination)
+		}
+		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return fmt.Errorf("create directory for %q: %w", file.Destination, err)
+		}
+		if err := os.WriteFile(destination, file.Content, 0o644); err != nil {
+			return fmt.Errorf("write %q: %w", file.Destination, err)
+		}
+	}
+	return nil
+}
+
 // planBundle validates the output configuration and computes all node paths.
 func planBundle(graph Graph, input, output, groupBy string, warnings io.Writer) (BundlePlan, error) {
 	inputPath, err := filepath.Abs(input)
